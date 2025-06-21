@@ -1,20 +1,16 @@
 {
-  "name": "reverso-backend",
+  "name": "vocabulary-backend",
   "version": "1.0.0",
+  "description": "Backend for VocabularyTrainer using Reverso Context",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "author": "Nicole",
+  "license": "MIT",
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^5.1.0",
-    "reverso-api": "^2.22.10"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.10"
+    "express": "^4.18.2",
+    "reverso-api": "^2.22.9"
   }
 }
