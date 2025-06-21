@@ -3,7 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const Reverso = require("reverso-api");
 
-// Словарь соответствия коротких кодов и полных названий языков
+// Сопоставление коротких кодов ISO языков и названий для reverso-api
 const LANGS = {
   en: "english",
   ru: "russian",
@@ -14,59 +14,47 @@ const LANGS = {
 };
 
 const app = express();
-app.use(cors()); // Разрешаем CORS-запросы
+app.use(cors()); // разрешаем CORS-запросы
 
 app.get("/api/translate", async (req, res) => {
   const { text, from, to } = req.query;
 
-  // Валидация параметров
+  // Проверка обязательных параметров
   if (!text || !from || !to) {
     return res.status(400).json({ error: "Missing query params" });
   }
 
-  // Преобразование кодов языков
+  // Маппинг ISO кодов на полные названия
   const fromLang = LANGS[from.toLowerCase()];
-  const toLang   = LANGS[to.toLowerCase()];
+  const toLang = LANGS[to.toLowerCase()];
   if (!fromLang || !toLang) {
     return res.status(400).json({ error: "Unsupported language code" });
   }
 
   try {
-    // Запрашиваем контекстные данные
-    const contextData = await new Reverso().getContext(text, fromLang, toLang);
-    console.log("getContext →", JSON.stringify(contextData, null, 2));
+    // Получаем сырые данные контекста
+    const raw = await new Reverso().getContext(text, fromLang, toLang);
+    console.log("getContext →", JSON.stringify(raw, null, 2));
 
-    // Проверяем, есть ли валидные переводы или примеры
-    const hasTranslations =
-      Array.isArray(contextData.translations) &&
-      contextData.translations.some(t => t && t.trim());
+    // Фильтруем пустые переводы
+    const translations = Array.isArray(raw.translations)
+      ? raw.translations.filter(t => t && t.trim())
+      : [];
 
-    const hasExamples =
-      Array.isArray(contextData.examples) &&
-      contextData.examples.some(ex =>
-        (ex.source && ex.source.trim()) || (ex.target && ex.target.trim())
-      );
+    // Фильтруем пустые примеры
+    const examples = Array.isArray(raw.examples)
+      ? raw.examples.filter(ex => ex.source && ex.source.trim() && ex.target && ex.target.trim())
+      : [];
 
-    // Если есть хоть переводы, хоть примеры — возвращаем контекст
-    if (hasTranslations || hasExamples) {
-      return res.json(contextData);
-    }
-
-    // Фоллбэк: запрашиваем просто переводы
-    let fallbackData;
-    try {
-      fallbackData = await new Reverso().getTranslation(text, fromLang, toLang);
-      console.log("getTranslation →", JSON.stringify(fallbackData, null, 2));
-    } catch (fallbackErr) {
-      console.error("Fallback getTranslation failed:", fallbackErr);
-    }
-
-    // Возвращаем фоллбэк, если он получен, иначе исходные данные
-    if (fallbackData && Array.isArray(fallbackData.translations)) {
-      return res.json(fallbackData);
-    } else {
-      return res.json(contextData);
-    }
+    // Отдаём только отфильтрованные результаты
+    return res.json({
+      ok: raw.ok,
+      text: raw.text,
+      source: raw.source,
+      target: raw.target,
+      translations,
+      examples
+    });
 
   } catch (err) {
     console.error(err);
@@ -74,6 +62,5 @@ app.get("/api/translate", async (req, res) => {
   }
 });
 
-// Запуск сервера
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
