@@ -65,7 +65,10 @@ async function robustTranslation(text, from, to) {
 // Puppeteer fallback for context and translations
 async function puppeteerFallback(text, from, to) {
   const url = `https://context.reverso.net/translation/${from}-${to}/${encodeURIComponent(text)}`;
-  const browser = await puppeteer.launch({ args: ['--no-sandbox'] });
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH
+  });
   const page = await browser.newPage();
   await page.goto(url, { waitUntil: 'domcontentloaded' });
 
