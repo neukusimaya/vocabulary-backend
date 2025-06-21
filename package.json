@@ -9,8 +9,10 @@
   "author": "Nicole",
   "license": "MIT",
   "dependencies": {
+    "bottleneck": "^2.19.5",
     "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "reverso-api": "^2.22.9"
+    "express": "^4.21.2",
+    "node-cache": "^5.1.2",
+    "reverso-api": "^2.22.10"
   }
 }
