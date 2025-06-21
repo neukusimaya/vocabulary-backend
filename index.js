@@ -1,3 +1,4 @@
+
 const express = require('express');
 const Reverso = require('reverso-api');
 
@@ -5,60 +6,56 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-// лог каждого запроса
+// Лог каждого запроса
 app.use((req, res, next) => {
   console.log(`→ ${req.method} ${req.path} query=`, req.query);
   next();
 });
 
-// маппинг ISO-кодов в названия языков для Reverso
+// Маппинг ISO-кодов в названия языков для Reverso
 const langMap = {
   en: 'english', ru: 'russian',
-  fr: 'french',  de: 'german',
+  fr: 'french', de: 'german',
   es: 'spanish', it: 'italian',
   pt: 'portuguese'
 };
 
-
-
-// вспомогательная задержка с экспоненциальным бэкоффом и джиттером
+// Эмуляция задержки с экспоненциальным бэкоффом и джиттером
 async function backoff(attempt) {
-  const base = 300 * Math.pow(2, attempt); // 300, 600, 1200, …
+  const base = 300 * Math.pow(2, attempt); // 300, 600, 1200, ...
   const jitter = Math.random() * 500;
   await new Promise(r => setTimeout(r, base + jitter));
 }
 
-// один экземпляр Reverso
+// Один экземпляр Reverso
 const reverso = new Reverso();
 
-// "робастный" вызов getTranslation
-async function robustTranslation(text, from, to) {
+// Робастный вызов getContext: до 5 попыток
+async function robustContext(text, from, to) {
   for (let i = 0; i < 5; i++) {
     try {
-      const tr = await reverso.getTranslation(text, from, to);
-      if (Array.isArray(tr.translations) && tr.translations.length > 0) {
-        return tr;
+      const ctx = await reverso.getContext(text, from, to);
+      if (ctx.ok && ((ctx.translations || []).length || (ctx.examples || []).length)) {
+        return ctx;
       }
     } catch (e) {
-      console.warn(`getTranslation attempt #${i+1} error:`, e.message);
+      console.warn(`getContext attempt #${i + 1} error:`, e.message);
     }
     await backoff(i);
   }
-  return { translations: [], context: { examples: [] } };
-}
+  return { ok: false, translations: [], examples: [] };
 }
 
-// "робастный" вызов getTranslation
+// Робастный вызов getTranslation: до 5 попыток
 async function robustTranslation(text, from, to) {
   for (let i = 0; i < 5; i++) {
-    reverso.setOptions({ userAgent: userAgents[(i + 1) % userAgents.length] });
     try {
       const tr = await reverso.getTranslation(text, from, to);
-      if (Array.isArray(tr.translations) && tr.translations.length > 0) {
+      if (Array.isArray(tr.translations) && tr.translations.length) {
         return tr;
       }
     } catch (e) {
-      console.warn(`getTranslation attempt #${i+1} error:`, e.message);
+      console.warn(`getTranslation attempt #${i + 1} error:`, e.message);
     }
     await backoff(i);
   }
@@ -67,28 +64,32 @@ async function robustTranslation(text, from, to) {
 
 app.get('/api/translate', async (req, res) => {
   const { text, from = 'en', to = 'ru' } = req.query;
-  if (!text) return res.status(400).json({ error: 'Missing "text" query parameter' });
+  if (!text) {
+    return res.status(400).json({ error: 'Missing "text" query parameter' });
+  }
 
   const sourceLang = langMap[from] || from;
-  const targetLang = langMap[to]   || to;
+  const targetLang = langMap[to] || to;
 
   try {
-    // 1) сначала context
+    // Попытка через getContext
     const ctx = await robustContext(text, sourceLang, targetLang);
     let translations = (ctx.ok ? ctx.translations : []).filter(t => t && t.trim());
-    let examples     = (ctx.ok ? ctx.examples     : []).filter(e => (e.source||e.target)?.trim());
+    let examples = (ctx.ok ? ctx.examples : []).filter(e => (e.source || e.target) && (e.source || e.target).trim());
 
-    // 2) fallback переводов
-    if (translations.length === 0) {
-      const fall = await robustTranslation(text, sourceLang, targetLang);
-      translations = (fall.translations || []).filter(t => t && t.trim());
+    // Fallback для переводов
+    if (!translations.length) {
+      const fallTr = await robustTranslation(text, sourceLang, targetLang);
+      translations = (fallTr.translations || []).filter(t => t && t.trim());
     }
-    // 3) fallback примеров
-    if (examples.length === 0) {
+
+    // Fallback для примеров
+    if (!examples.length) {
       const fallCtx = await robustTranslation(text, sourceLang, targetLang);
-      examples = (fallCtx.context?.examples || [])
+      const rawExamples = (fallCtx.context && fallCtx.context.examples) || [];
+      examples = rawExamples
         .map((e, i) => ({ id: i, source: e.source, target: e.target }))
-        .filter(e => (e.source||e.target)?.trim());
+        .filter(e => (e.source || e.target) && (e.source || e.target).trim());
     }
 
     return res.json({ text, source: from, target: to, translations, examples });
@@ -98,4 +99,6 @@ app.get('/api/translate', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
