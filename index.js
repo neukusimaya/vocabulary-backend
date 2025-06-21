@@ -1,36 +1,36 @@
- 
-const express = require('express');
-const Reverso = require('reverso-api');
-const puppeteer = require('puppeteer');
+const express    = require('express');
+const Reverso    = require('reverso-api');
+const puppeteer  = require('puppeteer');
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-// Лог каждого запроса
+// Лог входящих запросов
 app.use((req, res, next) => {
   console.log(`→ ${req.method} ${req.path} query=`, req.query);
   next();
 });
 
-// Маппинг ISO → названия языков для Reverso
+// Маппинг ISO-кодов в названия языков для Reverso
 const langMap = {
   en: 'english', ru: 'russian',
-  fr: 'french', de: 'german',
-  es: 'spanish', it: 'italian',
+  fr: 'french',   de: 'german',
+  es: 'spanish',  it: 'italian',
   pt: 'portuguese'
 };
 
-// One instance of Reverso
+// Экземпляр библиотеки Reverso
 const reverso = new Reverso();
 
-// Exponential backoff + jitter helper
+// Задержка с экспоненциальным бэкоффом и джиттером
 async function backoff(attempt) {
-  const delay = 300 * Math.pow(2, attempt) + Math.random() * 500;
-  await new Promise(r => setTimeout(r, delay));
+  const base   = 300 * Math.pow(2, attempt);
+  const jitter = Math.random() * 500;
+  await new Promise(r => setTimeout(r, base + jitter));
 }
 
-// Robust getContext with retries
+// Робастный вызов getContext (3 попытки)
 async function robustContext(text, from, to) {
   for (let i = 0; i < 3; i++) {
     try {
@@ -38,15 +38,15 @@ async function robustContext(text, from, to) {
       if (ctx.ok && ((ctx.translations || []).length || (ctx.examples || []).length)) {
         return ctx;
       }
-    } catch (e) {
-      console.warn(`getContext try #${i+1} failed:`, e.message);
+    } catch (err) {
+      console.warn(`getContext try #${i+1} failed:`, err.message);
     }
     await backoff(i);
   }
   return { ok: false, translations: [], examples: [] };
 }
 
-// Robust getTranslation with retries
+// Робастный вызов getTranslation (3 попытки)
 async function robustTranslation(text, from, to) {
   for (let i = 0; i < 3; i++) {
     try {
@@ -54,31 +54,32 @@ async function robustTranslation(text, from, to) {
       if (Array.isArray(tr.translations) && tr.translations.length) {
         return tr;
       }
-    } catch (e) {
-      console.warn(`getTranslation try #${i+1} failed:`, e.message);
+    } catch (err) {
+      console.warn(`getTranslation try #${i+1} failed:`, err.message);
     }
     await backoff(i);
   }
   return { translations: [], context: { examples: [] } };
 }
 
-// Puppeteer fallback for context and translations
+// Puppeteer-фоллбэк: парсим сайт напрямую
 async function puppeteerFallback(text, from, to) {
   const url = `https://context.reverso.net/translation/${from}-${to}/${encodeURIComponent(text)}`;
   const browser = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
   });
   const page = await browser.newPage();
   await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-  // Extract translations
-  const translations = await page.$$eval('.translations-content .translation', nodes =>
-    nodes.map(n => n.textContent.trim()).filter(t => t)
+  const translations = await page.$$eval(
+    '.translations-content .translation',
+    nodes => nodes.map(n => n.textContent.trim()).filter(t => t)
   );
-  // Extract examples
-  const examples = await page.$$eval('.example', nodes =>
-    nodes.map((n, i) => {
+
+  const examples = await page.$$eval(
+    '.example',
+    nodes => nodes.map((n, i) => {
       const src = n.querySelector('.example-source')?.textContent.trim() || '';
       const tgt = n.querySelector('.example-target')?.textContent.trim() || '';
       return { id: i, source: src, target: tgt };
@@ -89,49 +90,47 @@ async function puppeteerFallback(text, from, to) {
   return { translations, examples };
 }
 
+// Основной маршрут перевода
 app.get('/api/translate', async (req, res) => {
   const { text, from = 'en', to = 'ru' } = req.query;
   if (!text) {
     return res.status(400).json({ error: 'Missing "text" parameter' });
   }
 
-  const srcLang = langMap[from] || from;
-  const tgtLang = langMap[to] || to;
+  const src = langMap[from] || from;
+  const tgt = langMap[to]   || to;
 
   try {
-    // 1) Try Reverso API
-    const ctx = await robustContext(text, srcLang, tgtLang);
+    // 1) Стандартный API getContext
+    const ctx = await robustContext(text, src, tgt);
     let translations = (ctx.ok ? ctx.translations : []).filter(t => t && t.trim());
-    let examples = (ctx.ok ? ctx.examples : []).filter(e => (e.source && e.source.trim()) && (e.target && e.target.trim()));
+    let examples     = (ctx.ok ? ctx.examples     : []).filter(e => e.source && e.target);
 
-    // 2) Fallback translations
+    // 2) Fallback переводов через getTranslation
     if (!translations.length) {
-      const tr = await robustTranslation(text, srcLang, tgtLang);
+      const tr = await robustTranslation(text, src, tgt);
       translations = (tr.translations || []).filter(t => t && t.trim());
     }
 
-    // 3) Fallback examples via API
+    // 3) Fallback примеров через getTranslation
     if (!examples.length) {
-      const tr = await robustTranslation(text, srcLang, tgtLang);
-      const raw = (tr.context?.examples || []);
-      examples = raw.map((e, i) => ({ id: i, source: e.source, target: e.target }))
-                    .filter(e => e.source && e.target);
+      const tr = await robustTranslation(text, src, tgt);
+      examples = (tr.context?.examples || []).map((e, i) => ({ id: i, source: e.source, target: e.target }));
     }
 
-    // 4) If still empty, Puppeteer fallback
+    // 4) Если всё ещё пусто — Puppeteer-фоллбэк
     if (!translations.length || !examples.length) {
       console.info('Using Puppeteer fallback for', text);
-      const pu = await puppeteerFallback(text, from, to);
-      translations = translations.length ? translations : pu.translations;
-      examples = examples.length ? examples : pu.examples;
+      const pf = await puppeteerFallback(text, from, to);
+      if (!translations.length) translations = pf.translations;
+      if (!examples.length)     examples     = pf.examples;
     }
 
     return res.json({ text, source: from, target: to, translations, examples });
   } catch (err) {
     console.error('Fatal error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
- 
